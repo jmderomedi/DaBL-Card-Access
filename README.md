@@ -12,6 +12,7 @@ Current version functionality:
 To do:
 	- set up database (called "DaBL") structure:
 		[1] table: "access logs" (for main station)
+			name | UID | timestamp
 		[2] table: "users" (for machine-specfic access)
-			name | UID | member since | last visit | waiver? | series1? | uprint? | bantam? | pls475?
+			name | UID | membersince | lastvisit | waiver | series1pro | uprintseplus | bantamtools | pls475
 	- flesh out database commands (currently only READs are coded)
