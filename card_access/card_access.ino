@@ -1,7 +1,7 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PN532.h>
-// #include <TimerOne.h>
+#include <elapsedMillis.h>
 
 const uint8_t pn532_SCK  = 2;
 const uint8_t pn532_MOSI = 3;
@@ -17,6 +17,7 @@ bool py_are_we_connected = false;
 bool py_should_we_test_connection = false;
 uint32_t py_test_connection_interval = 60000;
 uint32_t ttt;
+elapsedMillis swipe_wait = 0;
 bool debug_mode = false;
 
 Adafruit_PN532 nfc(pn532_SCK, pn532_MISO, pn532_MOSI, pn532_CS);
@@ -34,7 +35,6 @@ enum colors {red = 0, green, blue, yellow, cyan, magenta};
     HW      red         solid   not connected to python
 
 */
-
 
 void setup() {
     if (common_anode) {
@@ -76,12 +76,15 @@ void loop() {
         py_test_connection();
     }
     if (py_are_we_connected) {
-        bool success;
-        uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
-        uint8_t uidLength;
-        success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
-        if (success) {
-            print_hex(uid, uidLength);
+        if (swipe_wait > 3000) {
+            bool success;
+            uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+            uint8_t uidLength;
+            success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+            if (success) {
+                print_hex(uid, uidLength);
+                swipe_wait = 0;
+            }
         }
         if (stringComplete) {
             String t =  String(input_string);
@@ -113,34 +116,34 @@ void serialEvent() {
 
 // TODO: needs to set a var that tells main loop to write card taps to eeprom/SD for later dump
 void py_test_connection() {
-    py_are_we_connected = false;
-    ttt = millis();
-    uint32_t conn_timer = millis();
-    Serial.println("Are you there, python?");
-    analogWrite(led_pins[red], led_low);
-    delay(100);
-    while ((!py_are_we_connected) && (millis() - conn_timer < 1000)) {
-        while (Serial.available()) {
-            char inChar = (char)Serial.read();
-            input_string += inChar;
-            if (inChar == '\n') {
-                stringComplete = true;
-            }
-        }
-        if (stringComplete) {
-            String t = String(input_string);
-            t.replace("\n", "");
-            if (t == "I am here, teensy!") {
-                input_string = "";
-                stringComplete = false;
-                py_are_we_connected = true;
-                blink_led(blue, 1);
-            }
-        }
-    }
-    if (!py_are_we_connected) {
-        analogWrite(led_pins[red], led_high);
-    }
+    py_are_we_connected = true;
+//    ttt = millis();
+//    uint32_t conn_timer = millis();
+//    Serial.println("Are you there, python?");
+//    analogWrite(led_pins[red], led_low);
+//    delay(100);
+//    while ((!py_are_we_connected) && (millis() - conn_timer < 1000)) {
+//        while (Serial.available()) {
+//            char inChar = (char)Serial.read();
+//            input_string += inChar;
+//            if (inChar == '\n') {
+//                stringComplete = true;
+//            }
+//        }
+//        if (stringComplete) {
+//            String t = String(input_string);
+//            t.replace("\n", "");
+//            if (t == "I am here, teensy!") {
+//                input_string = "";
+//                stringComplete = false;
+//                py_are_we_connected = true;
+//                blink_led(blue, 1);
+//            }
+//        }
+//    }
+//    if (!py_are_we_connected) {
+//        analogWrite(led_pins[red], led_high);
+//    }
 }
 
 // this may not work for magenta
@@ -196,4 +199,5 @@ void print_hex(const byte * data, const uint32_t numBytes) {
     }
     Serial.println();
 }
+
 

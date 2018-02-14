@@ -4,23 +4,13 @@
 import MySQLdb as db
 import serial
 import sys
+import datetime
 
 # ---------------------------------------------------------------------------------------------------------------
 # sql functions
 # ---------------------------------------------------------------------------------------------------------------
 
-def member_create(columns, data):
-    dbhandler.execute("INSERT INTO `users` (columns) VALUES (data);")
-    # dbhandler.execute("INSERT INTO `users`(`name`, `UID`, `membersince`, `lastvisit`, `waiver`, `series1`, \
-    #                 `uprint`, `bantam`, `pls475`) VALUES ([value-1],[value-2],[value-3],[value-4],[value-5],\
-    #                 [value-6],[value-7],[value-8],[value-9])");
-
-def get_columns():
-    # example: (`name`, `ID`, `type a`, `bantam`)
-    columns = ""
-    return columns
-
-def connect():
+def db_connect():
     try:
         conn = db.Connection(host=HOST,
                              port=PORT,
@@ -33,8 +23,15 @@ def connect():
     except Exception as e:
         print e
 
-def disconnect(conn):
+def db_disconnect(conn):
     conn.close()
+
+#  do not use
+def member_create(columns, data):
+    dbhandler.execute("INSERT INTO `users` (columns) VALUES (data);")
+    # dbhandler.execute("INSERT INTO `users`(`name`, `UID`, `membersince`, `lastvisit`, `waiver`, `series1`, \
+    #                 `uprint`, `bantam`, `pls475`) VALUES ([value-1],[value-2],[value-3],[value-4],[value-5],\
+    #                 [value-6],[value-7],[value-8],[value-9])");
 
 def get_column_names(cur, table_name):
     cur.execute("DESCRIBE {tn}"\
@@ -46,16 +43,25 @@ def get_all(cur, table_name):
         .format(tn=table_name))
     return cur.fetchall()
 
+def get_user(cur, table_name, user_id):
+    cur.execute("SELECT * FROM {tn} WHERE UID='{uid}'"\
+        .format(tn=table_name, uid=user_id))
+    return cur.fetchall()
+
 def get_access(cur, table_name, column_name, user_id):
     cur.execute("SELECT {cn} FROM {tn} WHERE UID='{uid}'"\
         .format(tn=table_name, cn=column_name, uid=user_id))
-    thing = cur.fetchall()
-    print thing
-    return thing
+    return cur.fetchall()
 
-def set_data(cur, table_name, column_name, data_value):
-    cur.execute("INSERT INTO {tn} ({cn}) VALUES ({dv})"\
-        .format(tn=table_name, cn=column_name, dv=data_value))
+def set_access(cur, table_name, column_name, user_id, column_access):
+    cur.execute("UPDATE {tn} SET {cn}={cv} WHERE UID='{uid}'"\
+        .format(tn=table_name, cn=column_name, uid=user_id))
+
+def insert_swiped_user(cur, table_name1, table_name2, user_name, user_id, dt_date, dt_time):
+    cur.execute("UPDATE `{tn1}` SET `lastaccessdate`='{dtd}', `lastaccesstime`='{dtt}' WHERE `UID`='{uid}'"\
+        .format(tn1=table_name1, dtd=dt_date, dtt=dt_time, uid=user_id))
+    cur.execute("INSERT INTO `{tn2}` (`name`, `UID`, `accessdate`, `accesstime`) VALUES ('{un}','{uid}','{dtd}','{dtt}')"\
+        .format(tn2=table_name2, un=user_name, uid=user_id, dtd=dt_date, dtt=dt_time))
 
 # ---------------------------------------------------------------------------------------------------------------
 # teensy-specific functions
@@ -81,7 +87,7 @@ def serial_find():
 # ---------------------------------------------------------------------------------------------------------------
 # globals
 # ---------------------------------------------------------------------------------------------------------------
-HOST = "localhost"
+HOST = "10.60.191.10"
 PORT = 3306
 USER = "root"
 PASSWORD = ""
@@ -92,70 +98,67 @@ DB = "DaBL"
 # ---------------------------------------------------------------------------------------------------------------
 
 # def main():
-
-port = 'COM10' # HARDWIRED RIGHT NOW
 value = ""
-print "start"
+print "#################################################"
+print "#      DaBL front desk swipe access reader      #"
 ports = serial_find()
 if ports == []:
-    print 'no ports found'
+    print "#               no ports found                 #"
     quit()
 else:
     # port = ports[-1]
+    port = 'COM3' # HARDWIRED RIGHT NOW
     teensy = serial.Serial(port, 115200)
-    print 'connected to', port
+    print "#           Teensy connected to", port, "           #"
+    print "#################################################\n"
     while True:
         value = teensy.readline()
         if value[-1] == "\n": # is the last character a newline?
             msg = value.rstrip()
-            print 'received:', msg
+            print "received UID:\t\t", msg
             if (str(msg) == str("Are you there, python?")):
                 msg = "I am here, teensy!\n"
-                print 'sending:', msg
+                print "sending:", msg
                 teensy.write(msg)
+            # send information
             else:
-                #send information
-                table_name = 'users'
-                column_name = 'name'
+                user_table = 'users'
                 user_id = msg
-                connection, cursor = connect()
-                # print "get all",
-                # for item in get_all(cursor, table_name):
-                #     print item
-                # print "get column names",
-                # for item in get_column_names(cursor, table_name):
-                #     print item,
-                access_request = 'waiver'
-                print "\nget access",
-                result = get_access(cursor, table_name, access_request, user_id)
-                if (result):
-                    for item in result:
+                print "-- member name:\t\t",
+                dt = datetime.datetime.now()
+                dt_date = dt.strftime("%Y/%m/%d")
+                dt_time = dt.strftime("%H:%M:%S")
+                connection, cursor = db_connect()
+                db_result = get_user(cursor, user_table, user_id)
+                if (db_result):
+                    db_result = db_result[0]
+                    user_name = db_result[0]
+                    access_request = 'waiver'
+                    print user_name
+                    print "-- safety waiver:\t",
+                    db_result = get_access(cursor, user_table, access_request, user_id)
+                    swipe_table = 'accesslogs'
+                    try:
+                        insert_swiped_user(cursor, user_table, swipe_table, user_name, user_id, dt_date, dt_time)
+                        connection.commit()
+                    except:
+                        connection.rollback()
+                    for item in db_result:
                         item = item[0]
                         if item == 1:
-                            print "-- RESULT: user approved"
+                            print "user approved"
                             teensy.write("RESULT: user approved\n")
+
                         elif item == 0:
-                            print "-- RESULT: user rejected"
+                            print "USER REJECTED, NO SAFETY WAIVER"
                             teensy.write("RESULT: user rejected\n")
                 else:
-                    print "-- RESULT: user not found"
+                    print "USER NOT FOUND"
                     teensy.write("RESULT: user not found\n")
-                disconnect(connection)
+                db_disconnect(connection)
+                print "-------------------------------------------------"
         else:
             continue
 
-
-
 # if __name__ == "__main__":
 #     main()
-
-
-# if (input_string == "RESULT: user approved") {              // green
-#                 blink_led(green, 3);
-#             } else if (input_string == "RESULT: user rejected") {       // red
-#                 blink_led(red, 3);
-#             } else if (input_string == "RESULT: user not found") {      // yellow
-#                 blink_led(yellow, 2);
-#             } else if (input_string == "RESULT: db not accessible") {   // magenta
-#                 blink_led(magenta, 2);
-#             }
