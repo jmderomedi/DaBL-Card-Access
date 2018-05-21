@@ -36,8 +36,14 @@ IPAddress server_addr(192, 168, 0, 101);    // MySQL server IP
 MySQL_Connection conn((Client *)&client);
 char mysql_user[] = "";                 // MySQL user
 char mysql_password[] = "";                // MySQL password
+// possibilities: master, typea, stratasys, bantam, pls475, jaguarv
+char SELECT_ACCESS[] = "SELECT name,uid,%s FROM %s WHERE uid=\'%s\'";
+char UPDATE_USER[] = "UPDATE %s SET lastaccessdate=\'%s\', lastaccesstime=\'%s\' WHERE uid=\'%s\'";
+char INSERT_ACCESS[] = "INSERT INTO %s (name, uid, accessdate, accesstime) VALUES (\'%s\', \'%s\', \'%s\', \'%s\')";
+char msg[128];
+String machine = "waiver";
 
-// time stuff
+// timestamping
 char timeServer[] = "time.nist.gov";  // NTP server
 unsigned int localPort = 2390;        // local port to listen for UDP packets
 const int NTP_PACKET_SIZE = 48;  // NTP timestamp is in the first 48 bytes of the message
@@ -46,17 +52,38 @@ byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing pack
 WiFiEspUDP Udp;
 bool is_the_time_set = false; 
 
-// search and general
-// possibilities: master, typea, stratasys, bantam, pls475, jaguarv
-char SELECT_ACCESS[] = "SELECT name,uid,%s FROM %s WHERE uid=\'%s\'";
-char UPDATE_USER[] = "UPDATE %s SET lastaccessdate=\'%s\', lastaccesstime=\'%s\' WHERE uid=\'%s\'";
-char INSERT_ACCESS[] = "INSERT INTO %s (name, uid, accessdate, accesstime) VALUES (\'%s\', \'%s\', \'%s\', \'%s\')";
-char msg[128];
-String machine = "waiver";
+// general hardware
+// esp8266: 0/1 (TX/RX), 4 (reset)
+uint8_t led_pins[] = {5, 6, 7};
+bool common_anode = false;
+uint8_t led_low, led_high;
+enum colors {red = 0, green, blue, yellow, cyan, magenta};
+
+/* colors:
+    red         solid   NOT connected to PN532
+    yellow      solid   -
+    green       solid   -
+    cyan        solid   NOT connected to wifi
+    blue        solid   -
+    magneta     solid   -
+    red         blink   in db, NOT approved
+    yellow      blink   couldn't connect to DB
+    green       blink   in db, approved
+    cyan        blink   -
+    blue        blink   -
+    magenta     blink   -
+*/
 
 void setup() {
+    setup_pins();
     nfc.begin();
+    delay(100);
     uint32_t version_data = nfc.getFirmwareVersion(); // do i need this?
+    if (!version_data) {
+        Serial.println("Not connected to PN532.");
+        turn_off_leds();
+        solid_led(red);
+    }
     nfc.setPassiveActivationRetries(0xFF); // set num of retries before fail (do i need this either?)
     nfc.SAMConfig(); // you gonna read some RFID cards
     Serial.begin(115200);
@@ -72,8 +99,6 @@ void setup() {
         }
         Udp.stop();
         wifi_start(wifi_LAN_ssid, wifi_LAN_password);
-    } else {
-        Serial.println("-- setup NOT CONNECTED TO WIFI");
     }
 }
 
@@ -106,36 +131,42 @@ void loop() {
                         sprintf(time_str, "%02d:%02d:%02d", hour(), minute(), second());
                         bool success = log_access(uid, nname, date_str, time_str);
                         if (success) {
-                            Serial.println("-- Successfully added entry to database");
+//                            Serial.println("-- Successfully added entry to database");
                         } else {
-                            Serial.println("-- Unable to add entry to database");
+//                            Serial.println("-- Unable to add entry to database");
                         }
                     } else {
                         Serial.println("-- Access granted. signing in/out.");
-                        //sign_in_out();
+                        sign_in_out();
                     }
+                    blink_led(green, 4);
                 } else {
                     Serial.println("-- Oh hell nah.");
+                    blink_led(red, 4);
                 }
                 conn.close();
             } else {
-                // not connected
+                Serial.println("-- Could not connect to database.");
+                blink_led(yellow, 4);
             }
         } else {
             Serial.println("Not connected to wifi. Womp.");
+            turn_off_leds();
+            solid_led(cyan);
         }
     }
-//    if ((hour() == 1) && (is_the_time_set == true)) {
-//        is_the_time_set = false;
-//    }
-//    if ((is_the_time_set == false) && (hour() > 1) && (year() > 1970)) {
-//        wifi_start(wifi_WAN_ssid, wifi_WAN_password);
-//        is_the_time_set = get_time();
-//        wifi_start(wifi_LAN_ssid, wifi_LAN_password);
-//    }
+   if ((hour() == 1) && (is_the_time_set == true)) {
+       is_the_time_set = false;
+   }
+   if ((is_the_time_set == false) && (hour() > 1) && (year() > 1970)) {
+       wifi_start(wifi_WAN_ssid, wifi_WAN_password);
+       is_the_time_set = get_time();
+       wifi_start(wifi_LAN_ssid, wifi_LAN_password);
+   }
 }
 
-boolean wifi_start(char *ssid, char *pass) {
+bool wifi_start(char *ssid, char *pass) {
+    turn_off_leds();
     WiFi.disconnect();
     Serial.print("Attempting to connect to WPA SSID: ");
     Serial.println(ssid);
@@ -144,6 +175,7 @@ boolean wifi_start(char *ssid, char *pass) {
     while (WiFi.status() != WL_CONNECTED && wifi_timer<10000);
     if (wifi_timer >= 10000) {
         Serial.println("-- WiFi NOT CONNECTED. Please check your connections/settings.");
+        solid_led(cyan);
         return false;
     }
     WiFi.macAddress(esp8266_mac);
@@ -251,11 +283,7 @@ bool log_access(String uid, String nname, char *date, char *ttime) {
     // Execute the query
     cur_mem->execute(query);
     delete cur_mem;
-
-
-
-
-    return false;
+    return true;
 }
 
 void sign_in_out() {
@@ -294,7 +322,7 @@ String print_hex(const byte * data, const uint32_t numBytes) {
     return str;
 }
 
-boolean get_time() {
+bool get_time() {
     sendNTPpacket(timeServer); // send an NTP packet to a time server
     // wait for a reply for UDP_TIMEOUT miliseconds
     unsigned long startMs = millis();
@@ -361,8 +389,6 @@ void sendNTPpacket(char *ntpSrv) {
 }
 
 // ====================================================================================
-// possibly deprecated functions follow
-/*
 void blink_led(uint8_t c) {
     uint8_t n = 2;
     blink_led(c, n);
@@ -402,18 +428,12 @@ void setup_pins() {
         pinMode(led_pins[i], OUTPUT);
         analogWrite(led_pins[i], led_low);
     }
-    if (! version_data) { //  reset hardware
-        solid_led(red);
-        while (1);
-    } else {
-        if (debug_mode) {
-            blink_led(red, 2);
-            blink_led(green, 2);
-            blink_led(blue, 2);
-            blink_led(yellow, 2);
-            blink_led(cyan, 2);
-            blink_led(magenta, 2);
-        }
-    }
 }
-*/
+
+bool turn_off_leds() {
+    for (byte i = 0 ; i < sizeof(led_pins)/sizeof(led_pins[0]) ; i++ ) {
+        analogWrite(led_pins[i], led_low);
+    }
+    return true;
+}
+
