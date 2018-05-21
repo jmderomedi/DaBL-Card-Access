@@ -8,6 +8,8 @@
 #include <TimeLib.h> 
 #include <WiFiEspUdp.h>
 
+#define DEBUG 1
+
 // pn532
 const uint8_t pn532_SCK  = 13;
 const uint8_t pn532_MOSI = 11;
@@ -23,8 +25,10 @@ String windows_password = "";    // Windows password
 // esp8266
 WiFiEspClient client;
 byte esp8266_mac[6];
-char wifi_ssid[] = "AUGuest-ByRCN";                  // Network Name
-char wifi_password[] = "";       // Network Password
+char wifi_WAN_ssid[] = "";                  // Network Name
+char wifi_WAN_password[] = "";       // Network Password
+char wifi_LAN_ssid[] = "";                  // Network Name
+char wifi_LAN_password[] = "";       // Network Password
 
 // server
 WiFiEspServer server(80);
@@ -40,6 +44,7 @@ const int NTP_PACKET_SIZE = 48;  // NTP timestamp is in the first 48 bytes of th
 const int UDP_TIMEOUT = 2000;    // timeout in miliseconds to wait for an UDP packet to arrive
 byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
 WiFiEspUDP Udp;
+bool is_the_time_set = false; 
 
 // search and general
 // possibilities: master, typea, stratasys, bantam, pls475, jaguarv
@@ -58,20 +63,17 @@ void setup() {
     while (!Serial);
     Serial1.begin(115200);
     WiFi.init(&Serial1);
-    Serial.print("Attempting to connect to WPA SSID: ");
-    Serial.println(wifi_ssid);
-    WiFi.begin(wifi_ssid, wifi_password);
-    elapsedMillis wifi_timer = 0;
-    while (WiFi.status() != WL_CONNECTED && wifi_timer<10000);
-    if (wifi_timer >= 10000) {
-        Serial.println("WiFi NOT CONNECTED. Please check your connections/settings.");
-        while(1);
-    }
-    WiFi.macAddress(esp8266_mac);
-    print_network();
+    wifi_start(wifi_WAN_ssid, wifi_WAN_password);
     Udp.begin(localPort);
     if (WiFi.status() == WL_CONNECTED) {
-        get_time();
+        while (year() <= 1970) {
+            is_the_time_set = get_time();
+            delay(2000);
+        }
+        Udp.stop();
+        wifi_start(wifi_LAN_ssid, wifi_LAN_password);
+    } else {
+        Serial.println("-- setup NOT CONNECTED TO WIFI");
     }
 }
 
@@ -88,33 +90,65 @@ void loop() {
     }
     if (rfid_received) {
         rfid_received = false;
-        bool are_we_connected = connect_to_db();
-        if (are_we_connected) {
-            bool access = check_access(F("dabl.users"), uid, machine);
-            Serial.print("access: ");
-            Serial.println(access);
-            if (access) {
-                Serial.println("you're in!");
-                if (machine == "waiver") {
-                    // dbnametable, uid, name, date, time
-                    bool success = log_access("", uid, "McDougal, DingDong", "today", "right now");
-                    if (success) {
-                        Serial.println("-- Successfully added entry to database");
+        if (WiFi.status() == WL_CONNECTED) {
+            bool are_we_connected = connect_to_db();
+            if (are_we_connected) {
+                String nname = check_access(F("dabl.users"), uid, machine);
+                Serial.print("access: ");
+                Serial.println(nname);
+                if (nname != "NULL") {
+                    Serial.println("you're in!");
+                    if (machine == "waiver") {
+                        // dbnametable, uid, name, date, time
+                        char date_str[128];
+                        char time_str[128];
+                        sprintf(date_str, "%04d/%02d/%02d", year(), month(), day());
+                        sprintf(time_str, "%02d:%02d:%02d", hour(), minute(), second());
+                        bool success = log_access(uid, nname, date_str, time_str);
+                        if (success) {
+                            Serial.println("-- Successfully added entry to database");
+                        } else {
+                            Serial.println("-- Unable to add entry to database");
+                        }
                     } else {
-                        Serial.println("-- Unable to add entry to database");
+                        Serial.println("-- Access granted. signing in/out.");
+                        //sign_in_out();
                     }
                 } else {
-                    Serial.println("-- Access granted. signing in/out.");
-                    //sign_in_out();
+                    Serial.println("-- Oh hell nah.");
                 }
+                conn.close();
             } else {
-                Serial.println("-- Oh hell nah.");
+                // not connected
             }
-            conn.close();
         } else {
-            Serial.println("Not connected to DB. Check your settings.");
+            Serial.println("Not connected to wifi. Womp.");
         }
     }
+//    if ((hour() == 1) && (is_the_time_set == true)) {
+//        is_the_time_set = false;
+//    }
+//    if ((is_the_time_set == false) && (hour() > 1) && (year() > 1970)) {
+//        wifi_start(wifi_WAN_ssid, wifi_WAN_password);
+//        is_the_time_set = get_time();
+//        wifi_start(wifi_LAN_ssid, wifi_LAN_password);
+//    }
+}
+
+boolean wifi_start(char *ssid, char *pass) {
+    WiFi.disconnect();
+    Serial.print("Attempting to connect to WPA SSID: ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+    elapsedMillis wifi_timer = 0;
+    while (WiFi.status() != WL_CONNECTED && wifi_timer<10000);
+    if (wifi_timer >= 10000) {
+        Serial.println("-- WiFi NOT CONNECTED. Please check your connections/settings.");
+        return false;
+    }
+    WiFi.macAddress(esp8266_mac);
+    print_network();
+    return true;
 }
 
 void print_network() {
@@ -131,8 +165,9 @@ void print_network() {
 // todo: if dbquery returns anything other than 1 user, return false
 // todo: hangs if given malformed sql request
 // todo: fix header column printing to use tabs
-bool check_access(String dbnametable, String uid, String machine) {
+String check_access(String dbnametable, String uid, String machine) {
     char query[128];
+    String cell;
     // machine, dbnametable, uid
     sprintf(query, SELECT_ACCESS, machine.c_str(), dbnametable.c_str(), uid.c_str());
     Serial.print("Query: ");
@@ -144,7 +179,10 @@ bool check_access(String dbnametable, String uid, String machine) {
     Serial.print("-- ");
     column_names *cols = cur_mem->get_columns();
     for (int f = 0; f < cols->num_fields; f++) {
-        Serial.print(cols->fields[f]->name);
+        cell = cols->fields[f]->name;
+        cell.toCharArray(query, 128);
+        sprintf(msg, "%-30s",query);
+        Serial.print(msg);
         if (f < cols->num_fields-1) {
             //Serial.print(".");
         }
@@ -153,14 +191,15 @@ bool check_access(String dbnametable, String uid, String machine) {
     Serial.print("\n-- ");
     // Read the rows and print them
     row_values *row = NULL;
-    String cell;
+    String nname;
     do {
         row = cur_mem->get_next_row();
         if (row != NULL) {
             for (int f = 0; f < cols->num_fields; f++) {
                 cell = row->values[f];
                 cell.toCharArray(query, 128);
-                sprintf(msg, "%-20s",query);
+                if (f == 0) nname = String(cell);
+                sprintf(msg, "%-30s",query);
                 Serial.print(msg);
             }
             Serial.print("\n-- ");
@@ -170,20 +209,19 @@ bool check_access(String dbnametable, String uid, String machine) {
     // Deleting the cursor also frees up memory used
     delete cur_mem;
     if (atoi(cell.c_str()) == 1) {
-        return true;
-    } else return false;
+        return nname;
+    } else return "NULL";
 }
 
 bool connect_to_db() {
-    uint8_t attempts = 0;
-    Serial.println("Connecting to database");
-    while (conn.connect(server_addr, 3306, mysql_user, mysql_password) != true && attempts < 10) {
+    elapsedMillis timeout = 0;
+    //Serial.println("Connecting to database");
+    while (conn.connect(server_addr, 3306, mysql_user, mysql_password) != true && timeout < 10000) {
         delay(500);
         Serial.print (".");
-        attempts++;
     }
     Serial.println("");
-    if (attempts != 10) {
+    if (timeout < 10000) {
         Serial.println("-- Connected to SQL Server!");
         return true;
     } else {
@@ -193,12 +231,12 @@ bool connect_to_db() {
 }
 
 // todo: better returning of information
-bool log_access(String dbnametable, String uid, String name, String date, String time) {
+bool log_access(String uid, String nname, char *date, char *ttime) {
     char query[128];
 
-    dbnametable = "dabl.users";
+    String dbnametable = "dabl.users";
     // dbnametable, date, time, uid
-    sprintf(query, UPDATE_USER, dbnametable.c_str(), date.c_str(), time.c_str(), uid.c_str());
+    sprintf(query, UPDATE_USER, dbnametable.c_str(), String(date).c_str(), String(ttime).c_str(), uid.c_str());
     Serial.print("Query: ");
     Serial.println(query);
     MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);
@@ -207,12 +245,13 @@ bool log_access(String dbnametable, String uid, String name, String date, String
 
     dbnametable = "dabl.accesslogs";
     // dbnametable, name, uid, date, time
-    sprintf(query, INSERT_ACCESS, dbnametable.c_str(), name.c_str(), uid.c_str(), date.c_str(), time.c_str());
+    sprintf(query, INSERT_ACCESS, dbnametable.c_str(), nname.c_str(), uid.c_str(), String(date).c_str(), String(ttime).c_str());
     Serial.print("Query: ");
     Serial.println(query);
     // Execute the query
     cur_mem->execute(query);
     delete cur_mem;
+
 
 
 
@@ -240,31 +279,29 @@ String print_hex(const byte * data, const uint32_t numBytes) {
     for (szPos=0; szPos < numBytes; szPos++) {
         // Append leading 0 for small values
         if (data[szPos] <= 0xF) {
-            Serial.print(F("0"));
+            //Serial.print(F("0"));
             str += F("0");
         }
-        Serial.print(data[szPos]&0xff, HEX);
+        //Serial.print(data[szPos]&0xff, HEX);
         str += String(data[szPos]&0xff, HEX);
         if ((numBytes > 1) && (szPos != numBytes - 1)) {
-            Serial.print(F(" "));
+            //Serial.print(F(" "));
             str += F(" ");
         }
     }
-    Serial.println();
+    //Serial.println();
     str.toUpperCase();
     return str;
 }
 
-void get_time() {
+boolean get_time() {
     sendNTPpacket(timeServer); // send an NTP packet to a time server
-  
     // wait for a reply for UDP_TIMEOUT miliseconds
     unsigned long startMs = millis();
     while (!Udp.available() && (millis() - startMs) < UDP_TIMEOUT) {}
-
-    Serial.println(Udp.parsePacket());
+    Serial.println("Attempting to set time: ");
     if (Udp.parsePacket()) {
-        Serial.println("packet received");
+        Serial.println("-- Packet received");
         // We've received a packet, read the data from it into the buffer
         Udp.read(packetBuffer, NTP_PACKET_SIZE);
 
@@ -276,34 +313,24 @@ void get_time() {
         // combine the four bytes (two words) into a long integer
         // this is NTP time (seconds since Jan 1 1900):
         unsigned long secsSince1900 = highWord << 16 | lowWord;
-        Serial.print("Seconds since Jan 1 1900 = ");
-        Serial.println(secsSince1900);
+        //Serial.print("Seconds since Jan 1 1900 = ");
+        //Serial.println(secsSince1900);
 
         // now convert NTP time into everyday time:
-        Serial.print("Unix time = ");
+        //Serial.print("Unix time = ");
         // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
         const unsigned long seventyYears = 2208988800UL;
         // subtract seventy years:
         unsigned long epoch = secsSince1900 - seventyYears;
         // print Unix time:
-        Serial.println(epoch);
-
-
-        // print the hour, minute and second:
-        Serial.print("The UTC time is ");       // UTC is the time at Greenwich Meridian (GMT)
-        Serial.print((epoch  % 86400L) / 3600); // print the hour (86400 equals secs per day)
-        Serial.print(':');
-        if (((epoch % 3600) / 60) < 10) {
-            // In the first 10 minutes of each hour, we'll want a leading '0'
-            Serial.print('0');
-        }
-        Serial.print((epoch  % 3600) / 60); // print the minute (3600 equals secs per minute)
-        Serial.print(':');
-        if ((epoch % 60) < 10) {
-            // In the first 10 seconds of each minute, we'll want a leading '0'
-            Serial.print('0');
-        }
-        Serial.println(epoch % 60); // print the second
+        //Serial.println(epoch);
+        Teensy3Clock.set(epoch);  // set RTC: not needed?
+        setTime(epoch);           // set arduino time?
+        //if ((epoch % 60) < 10) {
+        return true;
+    } else {
+        Serial.println("-- No packet received. Time will not be set.");
+        return false;
     }
 }
 
