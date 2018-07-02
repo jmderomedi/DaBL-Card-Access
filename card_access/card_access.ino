@@ -31,7 +31,6 @@ char wifi_LAN_ssid[] = "";                  // Network Name
 char wifi_LAN_password[] = "";       // Network Password
 
 // server
-WiFiEspServer server(80);
 IPAddress server_addr(192, 168, 0, 101);    // MySQL server IP
 MySQL_Connection conn((Client *)&client);
 char mysql_user[] = "";                 // MySQL user
@@ -75,6 +74,10 @@ enum colors {red = 0, green, blue, yellow, cyan, magenta};
 */
 
 void setup() {
+    Serial.begin(9600);
+    while (!Serial);
+    Serial1.begin(9600);
+    WiFi.init(&Serial1);
     setup_pins();
     nfc.begin();
     delay(100);
@@ -86,20 +89,16 @@ void setup() {
     }
     nfc.setPassiveActivationRetries(0xFF); // set num of retries before fail (do i need this either?)
     nfc.SAMConfig(); // you gonna read some RFID cards
-    Serial.begin(115200);
-    while (!Serial);
-    Serial1.begin(115200);
-    WiFi.init(&Serial1);
-    wifi_start(wifi_WAN_ssid, wifi_WAN_password);
-    Udp.begin(localPort);
-    if (WiFi.status() == WL_CONNECTED) {
-        while (year() <= 1970) {
-            is_the_time_set = get_time();
-            delay(2000);
-        }
-        Udp.stop();
+//    wifi_start(wifi_WAN_ssid, wifi_WAN_password);
+//    Udp.begin(localPort);
+//    if (WiFi.status() == WL_CONNECTED) {
+//        while (year() <= 1970) {
+//            is_the_time_set = get_time();
+//            delay(2000);
+//        }
+//        Udp.stop();
         wifi_start(wifi_LAN_ssid, wifi_LAN_password);
-    }
+//    }
 }
 
 void loop() {
@@ -173,11 +172,11 @@ bool wifi_start(char *ssid, char *pass) {
     WiFi.begin(ssid, pass);
     elapsedMillis wifi_timer = 0;
     while (WiFi.status() != WL_CONNECTED && wifi_timer<10000);
-    if (wifi_timer >= 10000) {
-        Serial.println("-- WiFi NOT CONNECTED. Please check your connections/settings.");
-        solid_led(cyan);
-        return false;
-    }
+//    if (wifi_timer >= 10000) {
+//        Serial.println("-- WiFi NOT CONNECTED. Please check your connections/settings.");
+//        solid_led(cyan);
+//        return false;
+//    }
     WiFi.macAddress(esp8266_mac);
     print_network();
     return true;
@@ -287,18 +286,18 @@ bool log_access(String uid, String nname, char *date, char *ttime) {
 }
 
 void sign_in_out() {
-    Keyboard.press(KEY_LEFT_GUI);              //Press the left windows key.
-    Keyboard.press('l');                       //Press the "l" key.
-    Keyboard.releaseAll();                     //Release all keys.
-    delay (100);
-    Keyboard.press(Enter);                     //Press the Enter key.
-    Keyboard.release(Enter);                   //Release the Enter key.
-    delay(100);
-    Keyboard.print(windows_password);
-    Keyboard.releaseAll();
-    delay(100);
-    Keyboard.press(Enter);
-    Keyboard.releaseAll();
+//    Keyboard.press(KEY_LEFT_GUI);              //Press the left windows key.
+//    Keyboard.press('l');                       //Press the "l" key.
+//    Keyboard.releaseAll();                     //Release all keys.
+//    delay (100);
+//    Keyboard.press(Enter);                     //Press the Enter key.
+//    Keyboard.release(Enter);                   //Release the Enter key.
+//    delay(100);
+//    Keyboard.print(windows_password);
+//    Keyboard.releaseAll();
+//    delay(100);
+//    Keyboard.press(Enter);
+//    Keyboard.releaseAll();
 }
 
 String print_hex(const byte * data, const uint32_t numBytes) {
