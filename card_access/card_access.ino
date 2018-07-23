@@ -5,7 +5,7 @@
 #include <WiFiEsp.h>
 #include <MySQL_Connection.h>
 #include <MySQL_Cursor.h>
-#include <TimeLib.h> 
+//#include <TimeLib.h> 
 #include <WiFiEspUdp.h>
 
 #define DEBUG 1
@@ -31,29 +31,20 @@ char wifi_LAN_ssid[] = "";                  // Network Name
 char wifi_LAN_password[] = "";       // Network Password
 
 // server
-IPAddress server_addr(192, 168, 0, 101);    // MySQL server IP
+IPAddress server_addr(192, 168, 0, 100);    // MySQL server IP
 MySQL_Connection conn((Client *)&client);
-char mysql_user[] = "";                 // MySQL user
-char mysql_password[] = "";                // MySQL password
+char mysql_user[] = "root";                 // MySQL user
+char mysql_password[] = "x";                // MySQL password
 // possibilities: master, typea, stratasys, bantam, pls475, jaguarv
 char SELECT_ACCESS[] = "SELECT name,uid,%s FROM %s WHERE uid=\'%s\'";
-char UPDATE_USER[] = "UPDATE %s SET lastaccessdate=\'%s\', lastaccesstime=\'%s\' WHERE uid=\'%s\'";
-char INSERT_ACCESS[] = "INSERT INTO %s (name, uid, accessdate, accesstime) VALUES (\'%s\', \'%s\', \'%s\', \'%s\')";
+char UPDATE_USER[] = "UPDATE %s SET `lastaccess`=CURRENT_TIMESTAMP() WHERE uid=\'%s\'";
+char INSERT_ACCESS[] = "INSERT INTO %s (name, uid) VALUES (\'%s\', \'%s\')";
 char msg[128];
 String machine = "waiver";
 
-// timestamping
-char timeServer[] = "time.nist.gov";  // NTP server
-unsigned int localPort = 2390;        // local port to listen for UDP packets
-const int NTP_PACKET_SIZE = 48;  // NTP timestamp is in the first 48 bytes of the message
-const int UDP_TIMEOUT = 2000;    // timeout in miliseconds to wait for an UDP packet to arrive
-byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
-WiFiEspUDP Udp;
-bool is_the_time_set = false; 
-
 // general hardware
 // esp8266: 0/1 (TX/RX), 4 (reset)
-uint8_t led_pins[] = {5, 6, 7};
+uint8_t led_pins[] = {3, 4, 5};
 bool common_anode = false;
 uint8_t led_low, led_high;
 enum colors {red = 0, green, blue, yellow, cyan, magenta};
@@ -74,11 +65,14 @@ enum colors {red = 0, green, blue, yellow, cyan, magenta};
 */
 
 void setup() {
-    Serial.begin(9600);
-    while (!Serial);
+    Serial.begin(115200);
+    //while (!Serial);
     Serial1.begin(9600);
     WiFi.init(&Serial1);
     setup_pins();
+    for (int i = 0 ; i < 6 ; i++) {
+        blink_led(i, 1);
+    }
     nfc.begin();
     delay(100);
     uint32_t version_data = nfc.getFirmwareVersion(); // do i need this?
@@ -89,15 +83,13 @@ void setup() {
     }
     nfc.setPassiveActivationRetries(0xFF); // set num of retries before fail (do i need this either?)
     nfc.SAMConfig(); // you gonna read some RFID cards
-//    wifi_start(wifi_WAN_ssid, wifi_WAN_password);
-//    Udp.begin(localPort);
-//    if (WiFi.status() == WL_CONNECTED) {
-//        while (year() <= 1970) {
-//            is_the_time_set = get_time();
-//            delay(2000);
-//        }
-//        Udp.stop();
-        wifi_start(wifi_LAN_ssid, wifi_LAN_password);
+    wifi_start(wifi_LAN_ssid, wifi_LAN_password);
+    //setSyncProvider(getTeensy3Time);
+    delay(100);
+//    if (timeStatus()!= timeSet) {
+//        Serial.println("Unable to sync with the RTC");
+//    } else {
+//        Serial.println("RTC has set the system time");
 //    }
 }
 
@@ -114,6 +106,8 @@ void loop() {
     }
     if (rfid_received) {
         rfid_received = false;
+        sprintf(msg, "Checking DB for %s...", uid.c_str());
+        Serial.println(msg);
         if (WiFi.status() == WL_CONNECTED) {
             bool are_we_connected = connect_to_db();
             if (are_we_connected) {
@@ -124,11 +118,11 @@ void loop() {
                     Serial.println("you're in!");
                     if (machine == "waiver") {
                         // dbnametable, uid, name, date, time
-                        char date_str[128];
-                        char time_str[128];
-                        sprintf(date_str, "%04d/%02d/%02d", year(), month(), day());
-                        sprintf(time_str, "%02d:%02d:%02d", hour(), minute(), second());
-                        bool success = log_access(uid, nname, date_str, time_str);
+                        //char date_str[128];
+                        //char time_str[128];
+                        //sprintf(date_str, "%04d/%02d/%02d", year(), month(), day());
+                        //sprintf(time_str, "%02d:%02d:%02d", hour(), minute(), second());
+                        bool success = log_access(uid, nname);
                         if (success) {
 //                            Serial.println("-- Successfully added entry to database");
                         } else {
@@ -154,14 +148,6 @@ void loop() {
             solid_led(cyan);
         }
     }
-   if ((hour() == 1) && (is_the_time_set == true)) {
-       is_the_time_set = false;
-   }
-   if ((is_the_time_set == false) && (hour() > 1) && (year() > 1970)) {
-       wifi_start(wifi_WAN_ssid, wifi_WAN_password);
-       is_the_time_set = get_time();
-       wifi_start(wifi_LAN_ssid, wifi_LAN_password);
-   }
 }
 
 bool wifi_start(char *ssid, char *pass) {
@@ -262,21 +248,21 @@ bool connect_to_db() {
 }
 
 // todo: better returning of information
-bool log_access(String uid, String nname, char *date, char *ttime) {
+bool log_access(String uid, String nname) {
     char query[128];
 
     String dbnametable = "dabl.users";
-    // dbnametable, date, time, uid
-    sprintf(query, UPDATE_USER, dbnametable.c_str(), String(date).c_str(), String(ttime).c_str(), uid.c_str());
+    // dbnametable, uid
+    sprintf(query, UPDATE_USER, dbnametable.c_str(), uid.c_str());
     Serial.print("Query: ");
     Serial.println(query);
     MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);
     // Execute the query
     cur_mem->execute(query);
 
-    dbnametable = "dabl.accesslogs";
-    // dbnametable, name, uid, date, time
-    sprintf(query, INSERT_ACCESS, dbnametable.c_str(), nname.c_str(), uid.c_str(), String(date).c_str(), String(ttime).c_str());
+    dbnametable = "dabl.accesslog";
+    // dbnametable, name, uid
+    sprintf(query, INSERT_ACCESS, dbnametable.c_str(), nname.c_str(), uid.c_str());
     Serial.print("Query: ");
     Serial.println(query);
     // Execute the query
@@ -319,72 +305,6 @@ String print_hex(const byte * data, const uint32_t numBytes) {
     //Serial.println();
     str.toUpperCase();
     return str;
-}
-
-bool get_time() {
-    sendNTPpacket(timeServer); // send an NTP packet to a time server
-    // wait for a reply for UDP_TIMEOUT miliseconds
-    unsigned long startMs = millis();
-    while (!Udp.available() && (millis() - startMs) < UDP_TIMEOUT) {}
-    Serial.println("Attempting to set time: ");
-    if (Udp.parsePacket()) {
-        Serial.println("-- Packet received");
-        // We've received a packet, read the data from it into the buffer
-        Udp.read(packetBuffer, NTP_PACKET_SIZE);
-
-        // the timestamp starts at byte 40 of the received packet and is four bytes,
-        // or two words, long. First, esxtract the two words:
-
-        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
-        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
-        // combine the four bytes (two words) into a long integer
-        // this is NTP time (seconds since Jan 1 1900):
-        unsigned long secsSince1900 = highWord << 16 | lowWord;
-        //Serial.print("Seconds since Jan 1 1900 = ");
-        //Serial.println(secsSince1900);
-
-        // now convert NTP time into everyday time:
-        //Serial.print("Unix time = ");
-        // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
-        const unsigned long seventyYears = 2208988800UL;
-        // subtract seventy years:
-        unsigned long epoch = secsSince1900 - seventyYears;
-        // print Unix time:
-        //Serial.println(epoch);
-        Teensy3Clock.set(epoch);  // set RTC: not needed?
-        setTime(epoch);           // set arduino time?
-        //if ((epoch % 60) < 10) {
-        return true;
-    } else {
-        Serial.println("-- No packet received. Time will not be set.");
-        return false;
-    }
-}
-
-// send an NTP request to the time server at the given address
-void sendNTPpacket(char *ntpSrv) {
-    // set all bytes in the buffer to 0
-    memset(packetBuffer, 0, NTP_PACKET_SIZE);
-    // Initialize values needed to form NTP request
-    // (see URL above for details on the packets)
-
-    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
-    packetBuffer[1] = 0;     // Stratum, or type of clock
-    packetBuffer[2] = 6;     // Polling Interval
-    packetBuffer[3] = 0xEC;  // Peer Clock Precision
-    // 8 bytes of zero for Root Delay & Root Dispersion
-    packetBuffer[12]  = 49;
-    packetBuffer[13]  = 0x4E;
-    packetBuffer[14]  = 49;
-    packetBuffer[15]  = 52;
-
-    // all NTP fields have been given values, now
-    // you can send a packet requesting a timestamp:
-    Udp.beginPacket(ntpSrv, 123); //NTP requests are to port 123
-
-    Udp.write(packetBuffer, NTP_PACKET_SIZE);
-
-    Udp.endPacket();
 }
 
 // ====================================================================================
@@ -434,5 +354,9 @@ bool turn_off_leds() {
         analogWrite(led_pins[i], led_low);
     }
     return true;
+}
+
+time_t getTeensy3Time() {
+    return Teensy3Clock.get();
 }
 
