@@ -1,3 +1,21 @@
+/**
+ * This code is American Universities Design and Build Lab ID access system. This allows the managers to limit the use of 
+ * CAMs within the space to only people certified to use them. This is universal to all the machines in the space and needs
+ * to be modified for each machine.
+ * 
+ * The serial monitor on each computer needs to be open for the device to connect to the database, if the serial monitor is closed
+ * then the device gets stuck waiting for the database. Just open the serial monitor in the admin login and than switch out to user login.
+ * The device will then work properly.
+ * 
+ * ##Author##
+ * Kristof Aldendorfer
+ * 
+ * ##Editors##
+ * James Deromedi
+ * 
+ * ##License##
+ * This is an open-source code so far, please just reference the author if you use this code.
+ */
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PN532.h>
